@@ -1,7 +1,7 @@
 /* Rebar-Fab Field Quote - takeoff & pricing math (shared by app and tests) */
 (function (root) {
-  const WT = {3:0.376,4:0.668,5:1.043,6:1.502,7:2.044,8:2.670,9:3.400,10:4.303,11:5.313};
-  const DB = {3:0.375,4:0.5,5:0.625,6:0.75,7:0.875,8:1.0,9:1.128,10:1.27,11:1.41}; // in
+  const WT = {3:0.376,4:0.668,5:1.043,6:1.502,7:2.044,8:2.670,9:3.400,10:4.303,11:5.313,14:7.650,18:13.600};
+  const DB = {3:0.375,4:0.5,5:0.625,6:0.75,7:0.875,8:1.0,9:1.128,10:1.27,11:1.41,14:1.693,18:2.257}; // in
   const DEFAULTS = { fab:0.72, straight:0.64, epoxy:0.82, wastePct:5, markupPct:10,
     truckPerLoad:1200, tonsPerLoad:24, shopPerTon:35, lapDb:40, hookDb:12, maxBar:40,
     markupFreightShop:false };
@@ -62,6 +62,12 @@
       return [ row('Verticals', p.vBar, nv*cur, H - c/12 + dw, dw>0 && p.dowelBent, {calc:`(floor((${L}x12-2x${c})/${n(p.sV)})+1 = ${nv}) x ${cur} curtain(s); len ${H} - ${c}in${dw?` + ${dw} ft dowel/lap`:''}`}),
                row('Horizontals', p.hBar, nh*cur, L - 2*c/12, false, {calc:`(floor((${H}x12-2x${c})/${n(p.sH)})+1 = ${nh}) x ${cur}; len ${L} - 2x${c}in`}) ]; },
     ductbank(p, s) { return BUILD.footing(p, s).map(r=>{ if(r.mark==='Stirrups/ties') r.mark='Closed ties'; return r; }); },
+    // Stock bundles: bundles x bars/bundle x stick length
+    bundle(p, s) { const len = p.stick==='custom' ? n(p.customLen) : n(p.stick,20), per = n(p.perBundle), nb = n(p.bundles); if (!(per>0 && nb>0 && len>0)) return [];
+      return [ row(`Bundles #${p.bar}`, p.bar, nb*per, len, p.kind==='fab', {noLap:true, calc:`${nb} bundles x ${per} bars/bundle x ${len} ft x ${WT[p.bar]} lb/LF = ${r2(nb*per*len*WT[p.bar])} lb = ${r3(nb*per*len*WT[p.bar]/2000)} T`}) ]; },
+    manual(p, s) { const lb = n(p.lb) > 0 ? n(p.lb) : n(p.tons)*2000; if (!(lb>0)) return [];
+      return [{ mark:'Manual entry', bar:'', count:1, len:'', lf:'', wt:'', lb:r2(lb), s20:'', s40:'', manual:true,
+        cls: p.kind==='straight' ? 'Straight' : 'Fabricated', calc:`Manual: ${r2(lb)} lb = ${r3(lb/2000)} T (${p.kind||'fab'})` }]; },
     custom(p, s) { const h=n(p.hooks,0); return [ row(p.mark||'Custom', p.bar, n(p.count), n(p.len)+hookFt(p.bar,s,h), !!p.fab || h>0, {calc:`${n(p.count)} x (${n(p.len)} ft${h?` + ${h} hook(s) x ${s.hookDb}db`:''})`}) ]; },
   };
 
@@ -69,8 +75,8 @@
     const s = Object.assign({}, DEFAULTS, settings||{});
     let rows = (BUILD[line.type]||(()=>[]))(line.p||{}, s).filter(r=>r.count>0);
     if (line.fab==='fab') rows.forEach(r=>r.cls='Fabricated'); if (line.fab==='straight') rows.forEach(r=>r.cls='Straight');
-    const out=[]; rows.forEach(r=>{ out.push(r); if (line.laps!==false){ const l=lapRow(r,s); if(l) out.push(l);} });
-    const lb = r2(out.reduce((a,r)=>a+r.lb,0)), lf = r3(out.reduce((a,r)=>a+r.lf,0));
+    const out=[]; rows.forEach(r=>{ out.push(r); if (line.laps!==false && !r.manual && !r.noLap){ const l=lapRow(r,s); if(l) out.push(l);} });
+    const lb = r2(out.reduce((a,r)=>a+r.lb,0)), lf = r3(out.reduce((a,r)=>a+(+r.lf||0),0));
     const fabLb = r2(out.filter(r=>r.cls==='Fabricated').reduce((a,r)=>a+r.lb,0));
     return { rows: out, lb, lf, fabLb, straightLb: r2(lb-fabLb), s20: lf>0?ceilE(lf/20):'', s40: lf>0?ceilE(lf/40):'' };
   }
@@ -107,24 +113,38 @@
     if (q.ov && (parseFloat(q.ov.targetPerLb)>0 || parseFloat(q.ov.targetPerTon)>0)) { const sol = solveMarkup(q, settings, {perLb:parseFloat(q.ov.targetPerLb)||0, perTon:parseFloat(q.ov.targetPerLb)>0?0:parseFloat(q.ov.targetPerTon)});
       if (sol) { s.markupPct = sol.markupPct; s.solved = sol; } }
     const mk = 1 + s.markupPct/100, w = 1 + s.wastePct/100, fsMk = s.markupFreightShop?mk:1;
+    // Shop drawings: auto (market/override $/T), rate (quote $/T), flat ($ spread over base tons), off
+    const SD = q.shop || {mode:'auto'}, sdMode = SD.mode || 'auto';
+    const sdRate = sdMode==='rate' ? n(SD.rate, s.shopPerTon) : sdMode==='auto' ? s.shopPerTon : 0;
     const lines = (q.lines||[]).map(L => {
       const t = takeoff(L, s);
-      const lbW = r2(t.lb*w), tons = lbW/2000;
+      const isMan = L.type==='manual' || L.type==='bundle', epx = L.epoxy || (isMan && L.p && L.p.kind==='epoxy');
+      const wl = (isMan && L.p && L.p.noWaste) ? 1 : w;   // manual lines may carry 0% waste
+      const lbW = r2(t.lb*wl), tons = lbW/2000;
       let cost;
-      if (L.epoxy) cost = lbW*s.epoxy; else cost = (t.fabLb*s.fab + t.straightLb*s.straight)*w;
+      if (epx) cost = lbW*s.epoxy; else cost = (t.fabLb*s.fab + t.straightLb*s.straight)*wl;
       const ovLb = parseFloat(L.ovPerLb);
       const material = ovLb>0 ? r2(lbW*ovLb) : r2(cost*mk);
-      const shop = r2(tons*s.shopPerTon*fsMk);
-      return { line:L, t, lbW, tons, cost:r2(cost), material, shop, trucking:0, optional:!!L.optional,
+      // shop drawings on FABRICATED tons only; bundles and stock/straight bar carry none
+      const fabT = L.type==='bundle' ? 0 : L.type==='manual' ? ((L.p && (L.p.stock || L.p.kind==='straight')) ? 0 : tons) : t.fabLb*wl/2000;
+      const shop = r2(fabT*sdRate*fsMk);
+      return { line:L, t, lbW, tons, fabT, cost:r2(cost), material, shop, trucking:0, optional:!!L.optional,
         belowCost: material < r2(cost) - 0.005 || (!(ovLb>0) && s.markupPct<=0),
-        priceMath: ovLb>0 ? `Line override: ${lbW} lb x $${ovLb}/lb sell = $${material.toFixed(2)} (cost $${r2(cost).toFixed(2)})` : L.epoxy ? `${t.lb} lb x ${w} waste = ${lbW} lb x $${s.epoxy} epoxy x ${mk} = $${material.toFixed(2)}`
-          : `(${t.fabLb} fab lb x $${s.fab} + ${t.straightLb} str lb x $${s.straight}) x ${w} waste x ${mk} = $${material.toFixed(2)}`,
-        shopMath: `${r3(tons)} T x $${s.shopPerTon}${fsMk!==1?' x '+mk:''} = $${shop.toFixed(2)}` };
+        priceMath: ovLb>0 ? `Line override: ${lbW} lb x $${ovLb}/lb sell = $${material.toFixed(2)} (cost $${r2(cost).toFixed(2)})` : epx ? `${t.lb} lb x ${wl} waste = ${lbW} lb x $${s.epoxy} epoxy x ${mk} = $${material.toFixed(2)}`
+          : `(${t.fabLb} fab lb x $${s.fab} + ${t.straightLb} str lb x $${s.straight}) x ${wl} waste x ${mk} = $${material.toFixed(2)}`,
+        shopMath: sdMode==='flat' ? '' : sdMode==='off' ? 'Off' : `${r3(fabT)} fab T x $${sdRate}${fsMk!==1?' x '+mk:''} = $${shop.toFixed(2)}` };
     });
     const acc = (q.acc||[]).map(a => { const sell=r2(n(a.qty)*n(a.sell)); return { a, sell, cost:r2(n(a.qty)*n(a.cost)), optional:!!a.optional,
       math:`${n(a.qty)} ${a.unit||''} x $${n(a.sell).toFixed(4).replace(/0+$/,'').replace(/\.$/,'')} = $${sell.toFixed(2)}` }; });
     const base = lines.filter(l=>!l.optional), opt = lines.filter(l=>l.optional);
     const baseTons = base.reduce((a,l)=>a+l.tons,0);
+    let shopInfo;
+    const baseFabT = base.reduce((a,l)=>a+l.fabT,0), allFabT = lines.reduce((a,l)=>a+l.fabT,0);
+    if (sdMode==='flat') { const F = baseFabT>0 ? r2(n(SD.flat)*fsMk) : 0; const fl = base.filter(l=>l.fabT>0); let left = F; base.forEach(l=>{ l.shop = 0; l.shopMath = 'Stock bar: no shop drawings'; });
+      fl.forEach((l,i)=>{ l.shop = i===fl.length-1 ? r2(left) : r2(F*l.fabT/baseFabT); left -= l.shop; l.shopMath = `${r3(l.fabT)} / ${r3(baseFabT)} fab T share of flat $${F.toFixed(2)}`; });
+      opt.forEach(l=>{ l.shop = 0; l.shopMath = 'Included in flat amount'; }); shopInfo = {mode:'flat', amt:F, fabT:r3(baseFabT), math:`Flat: $${F.toFixed(2)} spread over ${r3(baseFabT)} fabricated T${baseFabT===0?' (stock bar only: $0.00)':''}`}; }
+    else { const amt = r2(base.reduce((a,l)=>a+l.shop,0));
+      shopInfo = {mode:sdMode, rate:sdRate, amt, fabT:r3(baseFabT), math: sdMode==='off' ? 'Off: $0.00' : `${sdMode==='rate'?'Rate override':'Auto'}: ${r3(baseFabT)} fabricated T x $${sdRate}/T = $${amt.toFixed(2)}${baseFabT===0?' (stock bar only)':''}${(allFabT-baseFabT)>0?` · optional ${r3(allFabT-baseFabT)} fab T x $${sdRate}/T separately`:''}`}; }
     const tr = truckingFor(baseTons, s, q.trucking); tr.amt = r2(tr.amt*fsMk);
     // allocate base trucking by tonnage, last line takes rounding remainder
     let left = tr.amt; base.forEach((l,i)=>{ l.trucking = i===base.length-1 ? r2(left) : r2(baseTons>0? tr.amt*l.tons/baseTons : 0); left -= l.trucking;
@@ -136,9 +156,28 @@
     const sum = (arr,k)=>r2(arr.reduce((a,x)=>a+x[k],0));
     const baseTotal = r2(sum(base,'total') + sum(acc.filter(a=>!a.optional),'sell') + (base.length?0:tr.amt));
     const optTotal = r2(sum(opt,'total') + sum(acc.filter(a=>a.optional),'sell'));
-    return { s, lines, acc, trucking:tr, baseTons:r3(baseTons), baseTotal, optTotal, grand:r2(baseTotal+optTotal),
+    return { s, lines, acc, trucking:tr, shopInfo, baseTons:r3(baseTons), baseTotal, optTotal, grand:r2(baseTotal+optTotal),
       baseLb:r2(base.reduce((a,l)=>a+l.lbW,0)), internalCost:r2(lines.reduce((a,l)=>a+l.cost,0)+acc.reduce((a,x)=>a+x.cost,0)) };
   }
+  // Complete Manual Quote: typed line items, no takeoff, no auto rates.
+  // Material = typed Material $ if entered, else qty x unit sell. Total = Material + Trucking + Shop Drawings.
+  // Tons: LB -> qty/2000, T -> qty, other units -> optional typed tons.
+  const UNITS = ['LB','T','EA','LS','LF'];
+  function priceManual(q) {
+    const lines = (q.mlines||[]).map(M => { const qty = n(M.qty), price = n(M.price), ext = r2(qty*price);
+      const hasMat = M.mat!==undefined && M.mat!=='' && isFinite(parseFloat(M.mat));
+      const material = hasMat ? r2(n(M.mat)) : ext, trucking = r2(n(M.truck)), shop = r2(n(M.shop));
+      const tons = M.unit==='LB' ? qty/2000 : M.unit==='T' ? qty : n(M.tons);
+      const lbW = r2(tons*2000), total = r2(material+trucking+shop);
+      return { line:{desc:M.desc||'', ref:M.ref||'', epoxy:false, qtyText:`${qty.toLocaleString('en-US')} ${M.unit||''}`}, m:M, qty, ext, lbW, tons, cost:0, material, trucking, shop, total, optional:!!M.optional,
+        perTon: tons>0 ? r2(total/tons) : 0, perLb: lbW>0 ? Math.round(total/lbW*10000)/10000 : 0,
+        math: `${hasMat ? `Material typed $${material.toFixed(2)}` : `${qty} ${M.unit} x $${price} = $${ext.toFixed(2)}`} + trucking $${trucking.toFixed(2)} + shop $${shop.toFixed(2)} = $${total.toFixed(2)}${tons>0?` · ${r3(tons)} T`:''}` }; });
+    const base = lines.filter(l=>!l.optional), opt = lines.filter(l=>l.optional), sum = (a,k)=>r2(a.reduce((x,l)=>x+l[k],0));
+    const baseTotal = sum(base,'total'), optTotal = sum(opt,'total');
+    return { manual:true, s:{markupPct:0}, lines, acc:[], trucking:{amt:sum(base,'trucking'), math:'Typed'}, baseTons:r3(base.reduce((a,l)=>a+l.tons,0)),
+      baseLb: r2(base.reduce((a,l)=>a+l.lbW,0)), baseTotal, optTotal, grand:r2(baseTotal+optTotal), internalCost:0 };
+  }
+  const priceAny = (q, s) => q && q.manual ? priceManual(q) : priceQuote(q, s);
   // Chairs/dobies at a 4'x4' grid
   function chairGrid(L, W, layers, grid=4) { const nx = ceilE(n(L)/grid)+1, ny = ceilE(n(W)/grid)+1; const per = nx*ny;
     return { per, dobies: per, chairs: n(layers)>1?per:0, math:`(ROUNDUP(${L}/${grid})+1) x (ROUNDUP(${W}/${grid})+1) = ${nx} x ${ny} = ${per}` }; }
@@ -149,7 +188,30 @@
   function polyArea(pts){ let a=0; for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length]; a+=p.x*q.y-q.x*p.y;} return Math.abs(a)/2; }
   function parseCallout(txt){ const m = String(txt).replace(/[“”″]/g,'"').match(/#\s*(1[01]|[3-9])\s*(?:@|at|AT)\s*(\d+(?:\.\d+)?)\s*("|in|”|'')?\s*(?:O\.?C\.?)?\s*(EW|E\.W\.|EACH WAY)?/i);
     return m ? { bar:+m[1], spacing:+m[2], ew:!!m[4] } : null; }
+  // OCR text -> rebar callout suggestions
+  function normOCR(t){ return String(t).replace(/[“”″〃]/g,'"').replace(/[‘’′`]/g,"'").replace(/[–—]/g,'-').replace(/(\d)\s*''/g,'$1"'); }
+  function parseCallouts(text){ const t = normOCR(text), out = [], seen = new Set(); const add = o => { const k = JSON.stringify(o); if (!seen.has(k)) { seen.add(k); out.push(o); } };
+    let m; const reS = /#\s*(1[01]|[3-9])\s*(?:@|AT|at)\s*(\d+(?:\.\d+)?)\s*(?:"|IN\b|in\b)?\s*(O\.?\s*C\.?|E\.?\s*W\.?|EACH\s*WAY|T\s*&\s*B|T\.?\s*&\s*B\.?)?/g;
+    while ((m = reS.exec(t))) { const q = (m[3]||'').toUpperCase().replace(/[\s.]/g,''); add({kind:'spacing', bar:+m[1], spacing:+m[2], ew:q==='EW'||q==='EACHWAY', oc:q==='OC', tb:q==='T&B', text:m[0].trim()}); }
+    const reN = /\b(\d{1,3})\s*[-x]?\s*#\s*(1[01]|[3-9])\b\s*(CONT\.?|CONTINUOUS)?/gi;
+    while ((m = reN.exec(t))) add({kind:'count', n:+m[1], bar:+m[2], cont:!!m[3], text:m[0].trim()});
+    const reD = /\b(\d{1,4})\s*'\s*-?\s*(\d{1,2}(?:\.\d+)?)?(?:\s+(\d)\/(\d))?\s*"?/g;
+    while ((m = reD.exec(t))) { const ft = +m[1] + ((+m[2]||0) + (m[3]? m[3]/m[4] : 0))/12; add({kind:'dim', ft:r3(ft), text:m[0].trim()}); }
+    return out; }
+  // printed scale like 1/8"=1'-0", 3/32" = 1'-0", 1"=20', 1/4"=1' -> paper inches per real foot
+  function parseScale(str){ const t = normOCR(str).replace(/\s+/g,''); const m = t.match(/^(\d+(?:\.\d+)?)(?:\/(\d+))?"?=(\d+(?:\.\d+)?)'(?:-?(\d+(?:\.\d+)?)"?)?$/);
+    if (!m) return null; const inch = m[2] ? (+m[1])/(+m[2]) : +m[1]; const ft = +m[3] + (+(m[4]||0))/12; return ft>0 ? inch/ft : null; }
+  // pixels/ft from a printed scale + the printed sheet width (in) spanning imgWidthPx
+  function ppfFromScale(scaleStr, sheetWidthIn, imgWidthPx){ const ipf = parseScale(scaleStr); if (!ipf || !(sheetWidthIn>0)) return null; return imgWidthPx / (sheetWidthIn/ipf); }
+  // homography: maps (u,v) in dst rect to src quad; 4 point pairs
+  function homography(src, dst){ // returns H such that src ~ H * dst
+    const A=[], b=[]; for (let i=0;i<4;i++){ const {x:u,y:v}=dst[i], {x,y}=src[i];
+      A.push([u,v,1,0,0,0,-u*x,-v*x]); b.push(x); A.push([0,0,0,u,v,1,-u*y,-v*y]); b.push(y); }
+    for (let c=0;c<8;c++){ let p=c; for(let r=c+1;r<8;r++) if(Math.abs(A[r][c])>Math.abs(A[p][c])) p=r; [A[c],A[p]]=[A[p],A[c]]; [b[c],b[p]]=[b[p],b[c]];
+      for (let r=0;r<8;r++){ if(r===c) continue; const f=A[r][c]/A[c][c]; for(let k=c;k<8;k++) A[r][k]-=f*A[c][k]; b[r]-=f*b[c]; } }
+    const h=b.map((v,i)=>v/A[i][i]); return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1]; }
+  const applyH=(H,u,v)=>{ const w=H[6]*u+H[7]*v+1; return {x:(H[0]*u+H[1]*v+H[2])/w, y:(H[3]*u+H[4]*v+H[5])/w}; };
   const money = x => (x<0?'-':'')+'$'+Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const api = { effective, solveMarkup, RATE_KEYS, WT, DB, DEFAULTS, takeoff, priceQuote, truckingFor, chairGrid, pxPerFt, polyLen, polyArea, parseCallout, money, countAt };
+  const api = { parseCallouts, parseScale, ppfFromScale, homography, applyH, priceManual, priceAny, UNITS, effective, solveMarkup, RATE_KEYS, WT, DB, DEFAULTS, takeoff, priceQuote, truckingFor, chairGrid, pxPerFt, polyLen, polyArea, parseCallout, money, countAt };
   if (typeof module!=='undefined') module.exports = api; else root.RFCalc = api;
 })(this);

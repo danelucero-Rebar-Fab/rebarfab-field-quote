@@ -48,3 +48,13 @@ input[type=checkbox]{width:26px;min-height:26px;height:26px;vertical-align:middl
 .top img{height:34px}
 @media print{#splash,.credit{display:none!important}}
 @media screen and (max-width:520px){.quote{padding:10px}.qt{font-size:10.5px}.qt td,.qt th{padding:4px 2px}.qhead img{height:34px}.qhead .addr{font-size:10.5px}}
+/* v1.1 plan set */
+#cv{height:62vh;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.strip{display:flex;gap:8px;overflow-x:auto;padding:6px 0;-webkit-overflow-scrolling:touch}
+.sheet{flex:0 0 108px;border:2px solid var(--bd);border-radius:10px;background:#fff;padding:4px;text-align:left;min-height:120px}
+.sheet.on{border-color:var(--navy);box-shadow:0 0 0 2px #2c4a80 inset}.sheet img{width:100%;height:70px;object-fit:cover;border-radius:6px;background:#eee}
+.sheet span{display:block;font-size:12px;font-weight:700;color:var(--navy);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.sheet small{font-size:10.5px;color:var(--gray)}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0}.seg .btn{min-height:56px;font-size:17px;margin:0}
+.step{font-size:16px;font-weight:700;color:#7a3e00;background:#fff3c4;border-radius:8px;padding:8px 10px;margin:6px 0}
+.mrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;border-bottom:1px solid #eee;padding:6px 0}.mrow>div{flex:1 1 100%}.mrow select{flex:1;width:auto}
+.dup{background:#fde8e8;border:1px solid #e99;border-radius:8px;padding:8px;margin:6px 0;font-size:14px}

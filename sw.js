@@ -1,5 +1,5 @@
-const VER = 'rf-quote-v1';
-const CORE = ['./','./index.html','./app.js','./calc.js','./styles.css','./manifest.json','./accessories.json','./logo.png',
+const VER = 'rf-quote-v1.1';
+const CORE = ['./','./index.html','./app.js','./calc.js','./photo.js','./lib/pdf.min.js','./lib/pdf.worker.min.js','./lib/jspdf.umd.min.js','./lib/jspdf.plugin.autotable.min.js','./styles.css','./manifest.json','./accessories.json','./logo.png',
   './icons/icon-192.png','./icons/icon-512.png','./icons/icon-maskable-512.png','./icons/apple-touch-icon.png','./icons/favicon-32.png'];
 const OCR = ['./ocr/tesseract.min.js','./ocr/worker.min.js','./ocr/tesseract-core-lstm.wasm.js','./ocr/tesseract-core-simd-lstm.wasm.js','./ocr/eng.traineddata.gz'];
 self.addEventListener('install', e => {
